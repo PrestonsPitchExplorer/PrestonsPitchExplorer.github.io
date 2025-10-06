@@ -3,9 +3,8 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>3D Brain Hearing Explorer</title>
+  <title>Pitch Explorer</title>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.39/Tone.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
   <style>
     body {
       font-family: Arial, sans-serif;
@@ -26,25 +25,48 @@
     }
     input[type=range] { width: 80%; }
     #status { margin-top: 1rem; font-size: 0.9rem; color: #555; }
+    .hint { font-size: 0.85rem; color: #666; margin-bottom: 0.5rem; }
     .row { display:flex; gap:10px; justify-content:center; align-items:center; }
     button { padding:8px 12px; border-radius:8px; border:none; background:#4a6fa5; color:white; cursor:pointer; }
     button.secondary { background:#7da2d9; }
-    #brainContainer {
-      width: 600px;
-      height: 400px;
-      margin: 20px auto;
-      background: #f0f0f0;
-      border-radius: 10px;
+    .tooltip {
+      position: absolute;
+      top: 10px; right: 10px;
+      cursor: pointer;
+      background: #eee;
+      border-radius: 50%;
+      width: 20px; height: 20px;
+      display: flex; justify-content: center; align-items: center;
+      font-weight: bold;
+      color: #4a6fa5;
     }
+    .tooltip-text {
+      display: none;
+      position: absolute;
+      top: 35px; right: 10px;
+      background: #fff;
+      border: 1px solid #ccc;
+      padding: 10px;
+      width: 280px;
+      font-size: 0.85rem;
+      border-radius: 8px;
+      box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+      text-align: left;
+      z-index: 5;
+    }
+    .tooltip:hover + .tooltip-text { display: block; }
+    canvas { margin-top: 20px; background: #f0f0f0; border-radius: 10px; }
   </style>
 </head>
 <body>
-  <h1>🧠 3D Brain Hearing Explorer</h1>
-  <p class="hint">Adjust sound settings and watch different brain regions light up based on frequency, loudness, and localization!</p>
+  <h1>🎵 Pitch Explorer</h1>
+  <p class="hint">Click Play to start audio. Use sliders to explore pitch, loudness, and sound localization!</p>
 
   <div class="control">
     <h2>Frequency (Pitch)</h2>
-    <input type="range" id="freqSlider" min="50" max="2000" value="440" step="1" />
+    <div class="tooltip">?</div>
+    <div class="tooltip-text">Pitch is how high or low a sound feels. <br><br><b>Place Theory:</b> Different pitches stimulate different places along the basilar membrane (best for high pitches). <br><b>Frequency Theory:</b> Neurons fire in sync with the sound wave (works best for low pitches).</div>
+    <input type="range" id="freqSlider" min="50" max="4000" value="440" step="1" />
     <p id="freqLabel">440 Hz</p>
     <div class="row">
       <button id="playBtn">▶ Play Tone</button>
@@ -54,25 +76,40 @@
 
   <div class="control">
     <h2>Amplitude (Loudness)</h2>
+    <div class="tooltip">?</div>
+    <div class="tooltip-text">Amplitude controls loudness (volume). It doesn’t change pitch but affects intensity. Use the slider to adjust loudness.</div>
     <input type="range" id="ampSlider" min="0" max="1" value="0.5" step="0.01" />
     <p id="ampLabel">Volume: 0.50</p>
   </div>
 
   <div class="control">
     <h2>Sound Localization</h2>
+    <div class="tooltip">?</div>
+    <div class="tooltip-text">We locate sounds based on timing and intensity differences between ears. Slide left or right to hear the effect.</div>
     <input type="range" id="panSlider" min="-1" max="1" value="0" step="0.01" />
     <p id="panLabel">Pan: Center</p>
   </div>
-
+  
   <div class="control">
-    <h2>Brain Activity Visualization</h2>
-    <div id="brainContainer"></div>
+    <h2>Frequency Theory Demo (Neuron Firing)</h2>
+    <div class="tooltip">?</div>
+    <div class="tooltip-text">Each dot represents a neuron firing in sync with the sound wave. Multiple dots show how neurons fire together. Use the toggle to see slow-motion for clarity.</div>
+    <button id="toggleSlowBtn">Toggle Slow Motion</button>
+    <canvas id="freqTheoryCanvas" width="500" height="60"></canvas>
+    <canvas id="freqTheorySlowCanvas" width="500" height="60" style="display:none; margin-top:10px; margin-left:50px"></canvas>
   </div>
+  
+  <div class="control">
+    <h2>Place Theory Demo (Cochlea Map)</h2>
+    <div class="tooltip">?</div>
+    <div class="tooltip-text">This bar represents the cochlea. Lower pitches light up the left side (apex), higher pitches light up the right side (base).</div>
+    <canvas id="placeCanvas" width="500" height="50"></canvas>
+  </div>
+
 
   <div id="status">Status: idle</div>
 
   <script>
-    // Sliders & UI
     const freqSlider = document.getElementById('freqSlider');
     const freqLabel = document.getElementById('freqLabel');
     const ampSlider = document.getElementById('ampSlider');
@@ -80,6 +117,18 @@
     const panSlider = document.getElementById('panSlider');
     const panLabel = document.getElementById('panLabel');
     const statusEl = document.getElementById('status');
+
+    const placeCanvas = document.getElementById('placeCanvas');
+    const placeCtx = placeCanvas.getContext('2d');
+
+    const freqCanvas = document.getElementById('freqTheoryCanvas');
+    const freqCtx = freqCanvas.getContext('2d');
+    const slowCanvas = document.getElementById('freqTheorySlowCanvas');
+    const slowCtx = slowCanvas.getContext('2d');
+    let slowVisible = false;
+
+    const toggleSlowBtn = document.getElementById('toggleSlowBtn');
+
     const playBtn = document.getElementById('playBtn');
     const stopBtn = document.getElementById('stopBtn');
 
@@ -87,130 +136,93 @@
     let currentAmp = Number(ampSlider.value);
     let currentPan = Number(panSlider.value);
 
-    let synth = null, gainNode = null, panner = null;
+    let synth = null;
+    let gainNode = null;
+    let panner = null;
+    let isPlaying = false;
 
     function setStatus(msg) { statusEl.textContent = 'Status: ' + msg; }
 
-    // THREE.js Setup
-    const container = document.getElementById("brainContainer");
-    const scene = new THREE.Scene();
-    const camera = new THREE.PerspectiveCamera(45, container.clientWidth / container.clientHeight, 0.1, 1000);
-    camera.position.z = 5;
+    function drawPlaceTheory(freq) {
+      placeCtx.clearRect(0,0,placeCanvas.width,placeCanvas.height);
+      placeCtx.fillStyle = '#ddd';
+      placeCtx.fillRect(0, 20, placeCanvas.width, 10);
+      placeCtx.fillStyle = '#333';
+      placeCtx.font = '12px Arial';
+      placeCtx.fillText('Low pitch (Apex)', 5, 15);
+      placeCtx.fillText('High pitch (Base)', placeCanvas.width - 110, 15);
+      const pos = ((freq - 50) / (4000 - 50) * placeCanvas.width);
+      placeCtx.fillStyle = '#4a6fa5';
+      placeCtx.fillRect(pos-5, 10, 10, 30);
+    }
 
-    const renderer = new THREE.WebGLRenderer({antialias:true});
-    renderer.setSize(container.clientWidth, container.clientHeight);
-    container.appendChild(renderer.domElement);
-
-    const light = new THREE.PointLight(0xffffff, 1);
-    light.position.set(5, 5, 5);
-    scene.add(light);
-
-    const ambient = new THREE.AmbientLight(0x555555);
-    scene.add(ambient);
-
-    // Brain regions as spheres (placeholder for real brain model regions)
-    const regionMaterials = {
-      cochlea: new THREE.MeshStandardMaterial({color:0x999999}),
-      auditory: new THREE.MeshStandardMaterial({color:0x999999}),
-      frontal: new THREE.MeshStandardMaterial({color:0x999999}),
-      parietal: new THREE.MeshStandardMaterial({color:0x999999}),
-      temporal: new THREE.MeshStandardMaterial({color:0x999999}),
-      occipital: new THREE.MeshStandardMaterial({color:0x999999})
-    };
-
-    const regions = {
-      cochlea: new THREE.Mesh(new THREE.SphereGeometry(0.2,32,32), regionMaterials.cochlea),
-      auditory: new THREE.Mesh(new THREE.SphereGeometry(0.3,32,32), regionMaterials.auditory),
-      frontal: new THREE.Mesh(new THREE.SphereGeometry(0.35,32,32), regionMaterials.frontal),
-      parietal: new THREE.Mesh(new THREE.SphereGeometry(0.35,32,32), regionMaterials.parietal),
-      temporal: new THREE.Mesh(new THREE.SphereGeometry(0.3,32,32), regionMaterials.temporal),
-      occipital: new THREE.Mesh(new THREE.SphereGeometry(0.3,32,32), regionMaterials.occipital),
-    };
-
-    // Position them roughly in "brain-like" layout
-    regions.cochlea.position.set(-2, -1, 0);
-    regions.auditory.position.set(-1, 0, 0);
-    regions.frontal.position.set(1.5, 0.5, 0);
-    regions.parietal.position.set(1.5, -0.5, 0);
-    regions.temporal.position.set(0, -1, 0);
-    regions.occipital.position.set(2.5, 0, 0);
-
-    Object.values(regions).forEach(r => scene.add(r));
-
-    // Update brain activity
-    function updateBrainActivity(freq, amp, pan) {
-      // Reset
-      Object.values(regionMaterials).forEach(m => m.color.set(0x999999));
-
-      // Always Cochlea
-      regionMaterials.cochlea.color.set(0x4a6fa5);
-
-      // Frequency mapping
-      if (freq < 400) regionMaterials.auditory.color.set(0x4a6fa5);
-      else if (freq < 1000) regionMaterials.temporal.color.set(0x4a6fa5);
-      else if (freq < 1600) regionMaterials.parietal.color.set(0x4a6fa5);
-      else regionMaterials.frontal.color.set(0x4a6fa5);
-
-      // Amplitude = stronger activation
-      if (amp > 0.7) {
-        regionMaterials.auditory.color.set(0xff3333);
-        regionMaterials.temporal.color.set(0xff3333);
+    function drawFrequencyTheory(ctx, freq, speedFactor=1) {
+      ctx.clearRect(0,0,ctx.canvas.width,ctx.canvas.height);
+      const interval = 1000/(freq*speedFactor);
+      const now = performance.now();
+      if(!ctx.lastFlash) ctx.lastFlash = 0;
+      if(now - ctx.lastFlash > interval && isPlaying){
+        ctx.lastFlash = now;
+        ctx.fillStyle = '#4a6fa5';
+        for(let i=0;i<30;i++){
+          const x = 15*i + 15;
+          const y = Math.random()*40+10;
+          ctx.beginPath();
+          ctx.arc(x,y,5,0,Math.PI*2);
+          ctx.fill();
+        }
       }
-
-      // Pan = lateralized activation
-      if (pan < -0.3) regionMaterials.frontal.color.set(0x33ff33);
-      if (pan > 0.3) regionMaterials.occipital.color.set(0x3333ff);
     }
 
-    // Animate
-    function animate() {
-      requestAnimationFrame(animate);
-      scene.rotation.y += 0.003; // slow rotation
-      renderer.render(scene, camera);
-    }
-    animate();
-
-    // Events
     freqSlider.addEventListener('input', () => {
       currentFreq = Number(freqSlider.value);
       freqLabel.textContent = currentFreq + ' Hz';
-      updateBrainActivity(currentFreq, currentAmp, currentPan);
-      if (synth) synth.frequency.value = currentFreq;
+      drawPlaceTheory(currentFreq);
+      if(synth) synth.frequency.value = currentFreq;
     });
 
     ampSlider.addEventListener('input', () => {
       currentAmp = Number(ampSlider.value);
       ampLabel.textContent = 'Volume: ' + currentAmp.toFixed(2);
-      updateBrainActivity(currentFreq, currentAmp, currentPan);
-      if (gainNode) gainNode.gain.value = currentAmp;
+      if(gainNode) gainNode.gain.value = currentAmp;
     });
 
     panSlider.addEventListener('input', () => {
       currentPan = Number(panSlider.value);
       panLabel.textContent = currentPan===0 ? 'Pan: Center' : (currentPan<0?'Pan: Left ':'Pan: Right ')+Math.abs(currentPan).toFixed(2);
-      updateBrainActivity(currentFreq, currentAmp, currentPan);
-      if (panner) panner.pan.value = currentPan;
+      if(panner) panner.pan.value = currentPan;
     });
 
-    async function ensureAudioInitialized() {
+    toggleSlowBtn.addEventListener('click', () => {
+      slowVisible = !slowVisible;
+      slowCanvas.style.display = slowVisible ? 'block':'none';
+    });
+
+    async function ensureAudioInitialized(){
       await Tone.start();
-      if (!gainNode) gainNode = new Tone.Gain(currentAmp).toDestination();
-      if (!panner) panner = new Tone.Panner(currentPan).connect(gainNode);
-      if (!synth) synth = new Tone.Oscillator(currentFreq, 'sine').connect(panner);
+      if(!gainNode) gainNode = new Tone.Gain(currentAmp).toDestination();
+      if(!panner) panner = new Tone.Panner(currentPan).connect(gainNode);
+      if(!synth) synth = new Tone.Oscillator(currentFreq, 'sine').connect(panner);
     }
 
     playBtn.addEventListener('click', async () => {
       await ensureAudioInitialized();
-      if (synth.state !== 'started') { synth.start(); setStatus('playing tone at ' + currentFreq + ' Hz'); }
+      if(synth.state !== 'started'){ synth.start(); isPlaying=true; setStatus('playing tone at '+currentFreq+' Hz'); }
       else setStatus('tone already playing — continuing');
-      updateBrainActivity(currentFreq, currentAmp, currentPan);
     });
 
     stopBtn.addEventListener('click', () => {
-      if (synth && synth.state === 'started') { synth.stop(); setStatus('stopped'); }
+      if(synth && synth.state==='started'){ synth.stop(); isPlaying=false; setStatus('stopped'); }
     });
 
-    updateBrainActivity(currentFreq, currentAmp, currentPan);
+    function animate(){
+      requestAnimationFrame(animate);
+      drawPlaceTheory(currentFreq);
+      drawFrequencyTheory(freqCtx,currentFreq);
+      if(slowVisible) drawFrequencyTheory(slowCtx,currentFreq,0.1);
+    }
+
+    animate();
   </script>
 </body>
 </html>
